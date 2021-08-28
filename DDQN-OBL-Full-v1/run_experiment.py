@@ -121,7 +121,7 @@ def create_obs_stacker(environment, belief_level, history_size=4):
 
   if belief_level == -1:
     shape = environment.vectorized_observation_shape()[0]
-  elif belief_level in (0, 1):
+  elif belief_level in (0, 1, 2):
     shape = environment.vectorized_observation_shape()[0] + 125 # debug
 
   return ObservationStacker(history_size,
@@ -222,6 +222,13 @@ def parse_observations(observations, num_actions, obs_stacker, belief_level, fic
     elif fictitious == 1:
       hand_probas = [0]*125
     observation_vector = np.append(hand_probas, current_player_observation['vectorized'])
+  elif belief_level == 2:
+    if fictitious == 0:
+      team_mate = 1 - current_player
+      own_hand = get_own_hand_vector(observations['player_observations'][team_mate]['observed_hands'][1])
+    elif fictitious == 1:
+      own_hand = [0]*125
+    observation_vector = np.append(own_hand, current_player_observation['vectorized'])
   obs_stacker.add_observation(observation_vector, current_player)
   observation_vector = obs_stacker.get_observation_stack(current_player)
 
@@ -255,59 +262,30 @@ def run_fictitious_transition(environment_copy, action, obs_stacker_copy, belief
     observations, reward1, is_done, _ = environment_copy.step(int(action))
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment_copy.num_moves(), obs_stacker_copy, belief_level, 1))
-    action = agent.step(legal_moves, observation_vector)
-        
-    team_mate = 1 - current_player
-    print("")
-    print("FICTITIOUS O_T+1")
-    print("")
-    print("**************observations: ", observations)
-    print("**************own hand: ", observations['player_observations'][team_mate]['observed_hands'][1])
-    print("**************team mates hand: ", observations['player_observations'][current_player]['observed_hands'][1])
-    print("**************life tokens: ", observations['player_observations'][current_player]['life_tokens'])
-    print("**************info tokens: ", observations['player_observations'][current_player]['information_tokens'])
-    print("**************fireworks: ", observations['player_observations'][current_player]['fireworks'])
-    print("**************discard pile: ", observations['player_observations'][current_player]['discard_pile'])
-    print("**************reward: ", reward1)
-    print("**************is_done: ", is_done)
-    print("**************current_player: ", current_player)
-    print("**************legal_moves: ", legal_moves)
-    print("**************step action idx: ", action)
-    print("**************step action: ", environment_copy.game.get_move(action))
-        
-    if is_done:
-        # loss = agent.update_network()
-        return 0
-    
+    action = agent.fictitious_step(legal_moves, observation_vector)
+
+    if is_done is True:
+        r_t1 = reward1
+        o_t1 = np.array([0.]*len(observation_vector))
+        d_t1 = copy.deepcopy(is_done)
+        l_t1 = np.array([0]*len(legal_moves))
+        agent.write_fictitious_tuple((o_t, a_t, r_t1, o_t1, d_t1, l_t1))
+        return
+
     observations, reward2, is_done, _ = environment_copy.step(int(action))
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment_copy.num_moves(), obs_stacker_copy, belief_level, 1))
-        
-    team_mate = 1 - current_player
-    print("")
-    print("FICTITIOUS O_T+2")
-    print("")
-    print("**************observations: ", observations)
-    print("**************own hand: ", observations['player_observations'][team_mate]['observed_hands'][1])
-    print("**************team mates hand: ", observations['player_observations'][current_player]['observed_hands'][1])
-    print("**************life tokens: ", observations['player_observations'][current_player]['life_tokens'])
-    print("**************info tokens: ", observations['player_observations'][current_player]['information_tokens'])
-    print("**************fireworks: ", observations['player_observations'][current_player]['fireworks'])
-    print("**************discard pile: ", observations['player_observations'][current_player]['discard_pile'])
-    print("**************reward: ", reward2)
-    print("**************is_done: ", is_done)
-    print("**************current_player: ", current_player)
-    print("**************legal_moves: ", legal_moves)
 
     r_t1 = reward1 + reward2
-    o_t1 = copy.deepcopy(observation_vector)
     d_t1 = copy.deepcopy(is_done)
-    l_t1 = copy.deepcopy(legal_moves)
-    print("written tuple 1: ", (o_t, a_t, r_t1, o_t1, d_t1, l_t1))
+    if is_done is True:
+        o_t1 = np.array([0.]*len(observation_vector))
+        l_t1 = np.array([0]*len(legal_moves))
+    else:
+        o_t1 = copy.deepcopy(observation_vector)
+        l_t1 = copy.deepcopy(legal_moves)
     agent.write_fictitious_tuple((o_t, a_t, r_t1, o_t1, d_t1, l_t1))
-    loss = agent.update_network()
-    
-    return loss
+    return
 
 def run_one_episode(agent, environment, obs_stacker, belief_level):
   """Runs the agent on a single game of Hanabi in self-play mode.
@@ -321,6 +299,7 @@ def run_one_episode(agent, environment, obs_stacker, belief_level):
     step_number: int, number of actions in this episode.
     total_reward: float, undiscounted return for this episode.
   """
+#   begin_start_time = time.time_ns() # time
   obs_stacker.reset_stack()
   observations = environment.reset()
   if agent.eval_mode:
@@ -329,56 +308,23 @@ def run_one_episode(agent, environment, obs_stacker, belief_level):
     fictitious_eval = 0
   current_player, legal_moves, observation_vector = (
       parse_observations(observations, environment.num_moves(), obs_stacker, belief_level, fictitious_eval))
-  action = agent.begin_episode(current_player, legal_moves, observation_vector)
-  
-  team_mate = 1 - current_player
-  print("")
-  print("BEGIN GAME")
-  print("")
-  print("**************observations: ", observations)
-  print("**************own hand: ", observations['player_observations'][team_mate]['observed_hands'][1])
-  print("**************team mates hand: ", observations['player_observations'][current_player]['observed_hands'][1])
-  print("**************life tokens: ", observations['player_observations'][current_player]['life_tokens'])
-  print("**************info tokens: ", observations['player_observations'][current_player]['information_tokens'])
-  print("**************fireworks: ", observations['player_observations'][current_player]['fireworks'])
-  print("**************discard pile: ", observations['player_observations'][current_player]['discard_pile'])
-  print("**************current_player: ", current_player)
-  print("**************legal_moves: ", legal_moves)
-  print("**************action idx: ", action)
-  print("**************action: ", environment.game.get_move(action))
-  environment_copy, observations_copy = create_environment_copy(environment)
-  obs_stacker_copy = copy.deepcopy(obs_stacker)
-  print("")
-  print("COPIED ENVIRONMENT")
-  print("")
-  print("**************observations: ", observations_copy)
-  str_pyhanabi = str(observations_copy['player_observations'][current_player]['pyhanabi'])
-  fireworks_pos = str_pyhanabi.find("Fireworks:")
-  hands_pos = str_pyhanabi.find("Hands:")
-  fireworks_str = str_pyhanabi[fireworks_pos + 11:hands_pos-2]
-  fireworks_str_list = fireworks_str.split()
-  fireworks_dict = {}
-  for e in fireworks_str_list:
-      fireworks_dict[e[0]] = int(e[1])
-  print("**************own hand: ", observations_copy['player_observations'][team_mate]['observed_hands'][1])
-  print("**************team mates hand: ", observations_copy['player_observations'][current_player]['observed_hands'][1])
-  print("**************life tokens: ", observations_copy['player_observations'][current_player]['life_tokens'])
-  print("**************info tokens: ", observations_copy['player_observations'][current_player]['information_tokens'])
-  print("**************fireworks: ", fireworks_dict)
-  print("**************discard pile: ", observations_copy['player_observations'][current_player]['discard_pile'])
-  print("**************current_player: ", current_player)
-  print("**************legal_moves: ", legal_moves)
-  print("**************action idx: ", action)
-  print("**************action: ", environment_copy.game.get_move(action))
-  loss = run_fictitious_transition(environment_copy, action, obs_stacker_copy, belief_level, agent, observation_vector)
-  print("************** loss: ", loss)
+  action, loss = agent.step(legal_moves, observation_vector)
   
   is_done = False
   total_reward = 0
   step_number = 0
   total_loss = loss
-
+#   begin_period = time.time_ns() - begin_start_time # time
+#   print("begin_period: ", begin_period) # time
+  if not agent.eval_mode:
+    # fictitious_start_time = time.time_ns() # time
+    environment_copy, observations_copy = create_environment_copy(environment)
+    obs_stacker_copy = copy.deepcopy(obs_stacker)
+    run_fictitious_transition(environment_copy, action, obs_stacker_copy, belief_level, agent, observation_vector)
+    # fictitious_period = time.time_ns() - fictitious_start_time # time
+    # print("fictitious_period: ", fictitious_period) # time
   while not is_done:
+    # step_start_time = time.time_ns() # time
     observations, reward, is_done, _ = environment.step(int(action))
     modified_reward = max(reward, 0) if LENIENT_SCORE else reward
     total_reward += modified_reward
@@ -392,47 +338,20 @@ def run_one_episode(agent, environment, obs_stacker, belief_level):
       fictitious_eval = 0
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment.num_moves(), obs_stacker, belief_level, fictitious_eval))
-    action = agent.step(legal_moves, observation_vector)
-    team_mate = 1 - current_player
-    print("")
-    print("STEP NUMBER: ", step_number)
-    print("")
-    print("**************observations: ", observations)
-    print("**************own hand: ", observations['player_observations'][team_mate]['observed_hands'][1])
-    print("**************team mates hand: ", observations['player_observations'][current_player]['observed_hands'][1])
-    print("**************life tokens: ", observations['player_observations'][current_player]['life_tokens'])
-    print("**************info tokens: ", observations['player_observations'][current_player]['information_tokens'])
-    print("**************fireworks: ", observations['player_observations'][current_player]['fireworks'])
-    print("**************discard pile: ", observations['player_observations'][current_player]['discard_pile'])
-    print("**************reward: ", reward)
-    print("**************is_done: ", is_done)
-    print("**************current_player: ", current_player)
-    print("**************legal_moves: ", legal_moves)
-    print("**************step action idx: ", action)
-    print("**************step action: ", environment.game.get_move(action))
-    environment_copy, observations_copy = create_environment_copy(environment)
-    obs_stacker_copy = copy.deepcopy(obs_stacker)
-    print("")
-    print("COPIED ENVIRONMENT")
-    print("")
-    print("**************observations: ", observations_copy)
-    print("**************own hand: ", observations_copy['player_observations'][team_mate]['observed_hands'][1])
-    print("**************team mates hand: ", observations_copy['player_observations'][current_player]['observed_hands'][1])
-    print("**************life tokens: ", observations_copy['player_observations'][current_player]['life_tokens'])
-    print("**************info tokens: ", observations_copy['player_observations'][current_player]['information_tokens'])
-    print("**************fireworks: ", observations_copy['player_observations'][current_player]['fireworks'])
-    print("**************discard pile: ", observations_copy['player_observations'][current_player]['discard_pile'])
-    print("**************current_player: ", current_player)
-    print("**************legal_moves: ", legal_moves)
-    print("**************action idx: ", action)
-    print("**************action: ", environment_copy.game.get_move(action))
-    loss = run_fictitious_transition(environment_copy, action, obs_stacker_copy, belief_level, agent, observation_vector)
-    print("************** loss: ", loss)
+    action, loss = agent.step(legal_moves, observation_vector)
+    # step_period = time.time_ns() - step_start_time # time
+    # print("step_period: ", step_period) # time
+    if not agent.eval_mode:
+    #   fictitious2_start_time = time.time_ns() # time
+      environment_copy, observations_copy = create_environment_copy(environment)
+      obs_stacker_copy = copy.deepcopy(obs_stacker)
+      run_fictitious_transition(environment_copy, action, obs_stacker_copy, belief_level, agent, observation_vector)
+    #   fictitious2_period = time.time_ns() - fictitious2_start_time # time
+    #   print("fictitious2_period: ", fictitious2_period) # time
     total_loss += loss
 
   agent.end_episode()
 
-  # tf.logging.info('EPISODE: %d %g', step_number, total_reward)
   return step_number, total_reward, total_loss
 
 def run_one_phase(agent, environment, obs_stacker, min_steps, statistics,
@@ -469,8 +388,6 @@ def run_one_phase(agent, environment, obs_stacker, min_steps, statistics,
     sum_returns += episode_return
     num_episodes += 1
     sum_loss += episode_loss
-    
-    # print("step_count: ", step_count)
 
   return step_count, sum_returns, num_episodes, sum_loss
 
@@ -568,8 +485,8 @@ def run_experiment(agent,
                    checkpoint_dir,
                    start_iteration,
                    experiment_checkpointer,
-                   num_iterations=200,
-                   training_steps=5000,
+                   num_iterations=5000,
+                   training_steps=2000,
                    logging_file_prefix='log',
                    log_every_n=1,
                    checkpoint_every_n=1):
@@ -584,17 +501,12 @@ def run_experiment(agent,
     start_time = time.time()
     statistics = run_one_iteration(agent, environment, obs_stacker, iteration,
                                    training_steps, belief_level)
-    # tf.logging.info('Iteration %d took %d seconds', iteration,
-    #                 time.time() - start_time)
+
     start_time = time.time()
     log_experiment(experiment_logger, iteration, statistics,
                    logging_file_prefix, log_every_n)
-    # tf.logging.info('Logging iteration %d took %d seconds', iteration,
-    #                 time.time() - start_time)
+
     start_time = time.time()
-    # checkpoint_experiment(experiment_checkpointer, agent, experiment_logger,
-    #                       iteration, checkpoint_dir, checkpoint_every_n)
-    # tf.logging.info('Checkpointing iteration %d took %d seconds', iteration,
-    #                 time.time() - start_time)
-    if int(iteration) % 10 == 0:
-      torch.save(agent.mlp.state_dict(), "{}/model_{}.pt".format(checkpoint_dir, iteration))
+    if int(iteration) % 1 == 0:
+      torch.save(agent.mlp_target.state_dict(), "{}/model_{}.pt".format(checkpoint_dir, iteration))
+      torch.save(agent, "{}/agent_{}.pt".format(checkpoint_dir, iteration))

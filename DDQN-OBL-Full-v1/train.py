@@ -8,6 +8,8 @@ from absl import flags
 from third_party.dopamine import logger
 
 import run_experiment
+import os
+import torch
 
 FLAGS = flags.FLAGS
 
@@ -34,7 +36,10 @@ flags.DEFINE_string('logging_dir', '',
 flags.DEFINE_string('logging_file_prefix', 'log',
                     'Prefix to use for the log files.')
 
-flags.DEFINE_integer('belief_level', 0, "Belief level; -1: vanilla agent (no belief) 0: my belief about my hand 1: hand sample drawn from my belief about my hand")
+flags.DEFINE_integer('belief_level', -1, "Belief level; -1: vanilla agent (no belief) 0: my belief about my hand 1: hand sample drawn from my belief about my hand 2: Own hand as belief sample")
+
+flags.DEFINE_string('agent_file', 'previous_run/agent_28aug.pt',
+                    'Path to the agent file related to previous run.')
 
 
 def launch_experiment():
@@ -59,7 +64,12 @@ def launch_experiment():
 
   environment = run_experiment.create_environment()
   obs_stacker = run_experiment.create_obs_stacker(environment, FLAGS.belief_level)
-  agent = run_experiment.create_agent(environment, obs_stacker)
+  if os.path.exists(FLAGS.agent_file):
+    print(f"Found agent at: {FLAGS.agent_file}")
+    agent = torch.load(FLAGS.agent_file)
+  else:
+    print(f"Could not find agent at: {FLAGS.agent_file}")
+    agent = run_experiment.create_agent(environment, obs_stacker)
 
   checkpoint_dir = '{}/checkpoints'.format(FLAGS.base_dir)
 #   start_iteration, experiment_checkpointer = (

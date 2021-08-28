@@ -1,3 +1,4 @@
+import numpy as np
 import copy
 import random
 
@@ -107,27 +108,24 @@ def get_hand_probas(observation, belief_hand):
 		# Caclulate probabilities based on possible card counts
 		probas.extend([e/sum(l2) for e in l2])
 	missing_cards_len = 125 - len(probas)
-	print("missing_cards_len: ", missing_cards_len)
+# 	print("missing_cards_len: ", missing_cards_len)
 	probas.extend([0]*missing_cards_len)
-	print("probas")
+# 	print("probas")
 	probas_chunks = chunks_fn(probas, 25)
-	print("probas_chunks: ", probas_chunks)
+# 	print("probas_chunks: ", probas_chunks)
 	samples = []
 	for chunk in probas_chunks:
-		print("chunk: ", chunk)
-		m = max(chunk)
-		print("m: ", m)
-		max_indices = [u for u, v in enumerate(chunk) if v == m]
-		print("max_indices: ", max_indices)
-		max_index = random.choice(max_indices)
-		print("max_index: ", max_index)
+# 		print("chunk: ", chunk)
+		index, visible_cards = select_sample_from_probas(chunk, positions, visible_cards)
+# 		print("index: ", index)
+# 		print("visible_cards: ", visible_cards)
 		for i, j in enumerate(chunk):
-			if i == max_index and j > 0:
+			if i == index and j > 0:
 				samples.append(1)
 			else:
 				samples.append(0)
-	print("belief probas: ", probas)
-	print("belief samples: ", samples)
+# 	print("belief probas: ", probas)
+# 	print("belief samples: ", samples)
 	if belief_hand == 0:
 		hand = probas
 	elif belief_hand == 1:
@@ -138,3 +136,33 @@ def chunks_fn(lst, n):
     """Yield successive n-sized chunks from lst."""
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
+
+def select_sample_from_probas(chunk, positions, visible_cards):
+	s = np.array(chunk)
+	sort_index = list(np.argsort(-s))
+# 	print("sort_index: ", sort_index)
+	for index in sort_index:
+		card = positions[index].split('_')[0]
+		possible = int(positions[index].split('_')[1])
+
+		if visible_cards.count(card) < possible:
+			visible_cards.append(card)
+			return index, visible_cards
+
+	return None, visible_cards
+
+def get_own_hand_vector(own_hand):
+
+	colors = 'RYGWB'
+	ranks = '01234'
+	own_hand_vector = []
+	for card in own_hand:
+		for color in colors:
+			for rank in ranks:
+				if card['color'] == color and card['rank'] == int(rank):
+					own_hand_vector.append(1)
+				else:
+					own_hand_vector.append(0)
+	missing_cards_len = 125 - len(own_hand_vector)
+	own_hand_vector.extend([0]*missing_cards_len)
+	return own_hand_vector

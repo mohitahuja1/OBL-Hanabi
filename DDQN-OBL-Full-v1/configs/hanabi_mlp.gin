@@ -12,7 +12,7 @@ MLPAgent.epsilon_train = 0 # debug
 MLPAgent.epsilon_eval = 0 # debug
 MLPAgent.epsilon_decay_period = 1000 # debug
 MLPAgent.update_period = 1
-MLPAgent.target_update_period = 10 # debug
+MLPAgent.target_update_period = 500 # debug
 # MLPAgent.clip_grad_norm = 5 # debug
 MLPAgent.tf_device = '/gpu:0'  # '/cpu:*' use for non-GPU version
 

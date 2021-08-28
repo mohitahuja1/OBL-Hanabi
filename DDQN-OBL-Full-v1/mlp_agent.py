@@ -1,7 +1,7 @@
 import numpy as np
 import gin.tf
 from rl_env import Agent
-from third_party.dopamine import sum_tree
+from third_party.dopamine import sum_tree as dopamine_sum_tree
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
@@ -13,6 +13,7 @@ import math
 import csv
 import pickle
 import random
+import os
 from collections import defaultdict
 
 DEFAULT_PRIORITY = 100
@@ -69,11 +70,10 @@ class ExpBuffer():
         self.max_storage = max_storage
         self.counter = -1
         self.storage = [0 for i in range(self.max_storage)]
-        self.sum_tree = sum_tree.SumTree(self.max_storage)
+        self.sum_tree = dopamine_sum_tree.SumTree(self.max_storage)
         for index in range(self.max_storage):
             self.sum_tree.set(index, 0.0)
         self.batch_indices = []
-        # print("Root value at beginning: ", self.sum_tree.nodes[0][0])
 
     def write_tuple(self, oarodl, priority = DEFAULT_PRIORITY, index = None):
         if self.counter < self.max_storage-1:
@@ -81,18 +81,10 @@ class ExpBuffer():
         else:
             self.counter = 0
         self.storage[self.counter] = oarodl
-        print("written tuple 3: ", self.storage[self.counter])
-        if self.counter == self.max_storage-1: # debug
-            print("Buffer full")
-            print("Last element of buffer: ", self.storage[self.max_storage-1])
-            print("Last element of sum_tree: ", self.sum_tree.nodes[-1][self.max_storage-1])
-            print("Total priorities in sum_tree: ", len(self.sum_tree.nodes[-1]))
         if index is None:
             index = self.counter
 
         self.sum_tree.set(index, priority)
-        # debug
-        # print("Priority of a new experience should be 100: ", self.sum_tree.get(index))
 
     def set_priority(self, indices, priorities):
         for i, memory_index in enumerate(indices):
@@ -106,8 +98,6 @@ class ExpBuffer():
     
     def sample(self, batch_size):
         # Returns sizes of (batch_size, *) depending on action/observation/return/done
-        # print("storage[0]: ", self.storage[0])
-        # print("storage len: ", len(self.storage))
         self.batch_indices = []
         allowed_attempts = MAX_SAMPLE_ATTEMPTS
         while len(self.batch_indices) < batch_size and allowed_attempts > 0:
@@ -121,18 +111,10 @@ class ExpBuffer():
                 print("index: ", index)
                 print(self.sum_tree.nodes[-1])
                 raise Exception
-        # print("batch_indices: ", self.batch_indices)
         samples = np.empty((batch_size), dtype = object)
-        # print("samples: ", samples)
-        # print("storage[0]: ", self.storage[0])
-        # print("storage[batch_indices[0]]: ", self.storage[self.batch_indices[0]])
         for i, memory_index in enumerate(self.batch_indices):
             samples[i] = self.storage[memory_index]
-        # print("samples: ", samples)
         last_observations, actions, rewards, observations, dones, legal_actions = zip(*samples)
-        # print("last_observations len: ", len(last_observations))
-        # print("last_observations[0]: ", last_observations[0])
-        # print("actions: ", actions)
         return torch.tensor(last_observations, dtype = torch.float32).cuda(),\
                torch.tensor(actions).cuda(),\
                torch.tensor(rewards).float().cuda(),\
@@ -169,7 +151,6 @@ class MLPAgent(Agent):
                loss = 0,
                epsilon_fn=linearly_decaying_epsilon,
                tf_device='/cpu:*',):
-    # Global variables.
     self.num_actions = num_actions
     self.observation_size = observation_size
     self.num_players = num_players
@@ -182,11 +163,6 @@ class MLPAgent(Agent):
     self.learning_rate = learning_rate
     self.optimizer_epsilon = optimizer_epsilon
     self.explore = explore
-    self.clip_grad_norm = clip_grad_norm
-    self.weight_decay = weight_decay
-    self.last_action = last_action
-    self.last_observation = last_observation
-    self.begin = begin
     self.i_episode = i_episode
     self.training_steps = training_steps
     self.update_period = update_period
@@ -194,75 +170,55 @@ class MLPAgent(Agent):
     self.loss = loss
     self.epsilon_fn = epsilon_fn
     self.eval_mode = False
-    self.q_values_list = []
-    self.target_values_list = []
     self.raw_data = [["training_step", "example_reward", "example_done", "avg_q_value", "avg_target_value", 
-                      "loss", "fc1_weight_NORM", "fc1_bias_NORM", "fc2_weight_NORM", "fc2_bias_NORM",
-                      "fc3_weight_NORM", "fc3_bias_NORM"]]
-    # MLP and ExpBuffer instances
+                  "loss", "fc1_weight_NORM", "fc1_bias_NORM", "fc2_weight_NORM", "fc2_bias_NORM",
+                  "fc3_weight_NORM", "fc3_bias_NORM"]]
+    # ExpBuffer
     self.replay_buffer = ExpBuffer(self.replay_buffer_size)
+    # MLP
     self.mlp = MLP(self.num_actions, self.observation_size).cuda()
     self.mlp_target = MLP(self.num_actions, self.observation_size).cuda()
     self.mlp_target.load_state_dict(self.mlp.state_dict())
+
     # Optimizer
     self.optimizer = torch.optim.Adam(self.mlp.parameters(), lr = self.learning_rate, eps = self.optimizer_epsilon)
-    
-  def greedy_act(self, observation, legal_actions):
-      
-    action = self.mlp.act(
-      torch.tensor(observation).float().view(1,-1).cuda(),
-      legal_actions,
-      epsilon = 0)
-
-    return action
     
   def write_fictitious_tuple(self, aorodl):
     
     aorodl_copy = copy.deepcopy(aorodl)
-    print("written tuple 2: ", aorodl_copy)
     self.replay_buffer.write_tuple(aorodl_copy)
 
-  def begin_episode(self, current_player, legal_actions, observation):
-      
-    if self.eval_mode:
-      epsilon = self.epsilon_eval
-    else:
-      epsilon = self.epsilon_fn(self.epsilon_decay_period, self.training_steps,
-                                self.explore, self.epsilon_train)
-    action = self.mlp.act(
-      torch.tensor(observation).float().view(1,-1).cuda(),
-      legal_actions,
-      epsilon = epsilon)
-
-    return action
-
   def step(self, legal_actions, observation):
-
+    if self.i_episode > self.explore:
+      self.loss = self._update_network()
     if self.eval_mode:
       epsilon = self.epsilon_eval
     else:
       epsilon = self.epsilon_fn(self.epsilon_decay_period, self.training_steps,
                                 self.explore, self.epsilon_train)
-
     action = self.mlp.act(
       torch.tensor(observation).float().view(1,-1).cuda(),
       legal_actions,
       epsilon = epsilon)
+    return action, self.loss
 
+  def fictitious_step(self, legal_actions, observation):
+    if self.eval_mode:
+      epsilon = self.epsilon_eval
+    else:
+      epsilon = self.epsilon_fn(self.epsilon_decay_period, self.training_steps,
+                                self.explore, self.epsilon_train)
+    action = self.mlp.act(
+      torch.tensor(observation).float().view(1,-1).cuda(),
+      legal_actions,
+      epsilon = epsilon)
     return action
 
   def end_episode(self):
     self.i_episode += 1
-    return None
 
   def bundle_and_checkpoint(self, checkpoint_dir, iteration_number):
     return None
-    
-  def update_network(self):
-    if self.i_episode > self.explore:
-      self.loss = self._update_network()
-      return self.loss
-    return 0
 
   def _update_network(self):
 
@@ -271,20 +227,12 @@ class MLPAgent(Agent):
     if self.training_steps % self.update_period == 0:
       epsilon = self.epsilon_fn(self.epsilon_decay_period, self.training_steps,
                                  self.explore, self.epsilon_train)
-      print("epsilon: ", epsilon)
       last_observations, actions, rewards, observations, dones, legal_actions = self.replay_buffer.sample(self.batch_size)
-      print("last_observations[0]: ", last_observations[0])
-      print("actions[0]: ", actions[0])
-      print("rewards[0]: ", rewards[0])
-      print("dones[0]: ", dones[0])
-      print("legal_actions[0]: ", legal_actions[0])
       # Get indices of the experiences (indices correspond to the buffer and the sum_tree object)
       batch_indices = copy.deepcopy(self.replay_buffer.batch_indices)
-      print("batch_indices: ", batch_indices)
 
       # Get priorities of each experience in batch
       target_priorities = self.replay_buffer.get_priority(batch_indices)
-      print("target_priorities: ", target_priorities)
 
       # Convert priorities to importance-sampling weight
       target_priorities = torch.add(target_priorities, 1e-10)
